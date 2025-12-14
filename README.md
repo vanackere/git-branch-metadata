@@ -82,15 +82,29 @@ git branch-metadata get -r <remote> <branch_name> <key>
 #### Get all metadata
 
 ```bash
-git branch-metadata get-all <branch_name>
+git branch-metadata show <branch_name>
 ```
 
-Returns key-value pairs (one per line in `key=value` format).
+Returns key-value pairs (one per line in `key=value` format). Values are shell-quoted using `printf %q`, which produces shell-safe quoted strings (e.g., `$'line1\nline2'` for multi-line values).
 
 Get all from remote:
 
 ```bash
-git branch-metadata get-all -r <remote> <branch_name>
+git branch-metadata show -r <remote> <branch_name>
+```
+
+#### Unescape encoded values
+
+```bash
+git branch-metadata unescape <encoded_value>
+```
+
+Decode a shell-quoted value from `show` or `history` output. Handles `printf %q` format (e.g., `$'line1\nline2'` becomes actual newlines):
+
+```bash
+# Get encoded value and decode it
+encoded=$(git branch-metadata show test-branch | grep '^description=' | cut -d= -f2-)
+git branch-metadata unescape "$encoded"
 ```
 
 #### Unset a metadata key
@@ -129,11 +143,25 @@ List remote branches with metadata:
 git branch-metadata list -r <remote>
 ```
 
+#### List keys for a branch
+
+```bash
+git branch-metadata keys <branch_name>
+```
+
+List keys from remote:
+
+```bash
+git branch-metadata keys -r <remote> <branch_name>
+```
+
 #### View metadata history
 
 ```bash
 git branch-metadata history <branch_name>
 ```
+
+Shows the commit history with metadata values (values are shell-quoted using `printf %q` for safe display).
 
 View remote metadata history:
 
@@ -151,6 +179,12 @@ git branch-metadata push <remote> <branch_name>
 
 ```bash
 git branch-metadata fetch <remote> <branch_name>
+```
+
+Fetches metadata from a remote repository. By default, this operation will fail if the local metadata has diverged from the remote (non-fast-forward). Use `--force` to overwrite local metadata:
+
+```bash
+git branch-metadata fetch --force <remote> <branch_name>
 ```
 
 #### Help
@@ -203,7 +237,7 @@ git branch-metadata get feature/new-feature creator
 # Output: alice@example.com
 
 # Get all metadata
-git branch-metadata get-all feature/new-feature
+git branch-metadata show feature/new-feature
 # Output:
 # creator=alice@example.com
 # created_at=2024-01-15

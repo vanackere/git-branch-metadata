@@ -15,6 +15,10 @@ METADATA_VERBOSE="${METADATA_VERBOSE:-0}"
 
 readonly METADATA_ZERO_OID="0000000000000000000000000000000000000000"
 
+#============================================================================
+# HELPER FUNCTIONS
+#============================================================================
+
 function __usage_prefix() {
     local name
     name=$(basename "$0")
@@ -66,14 +70,14 @@ function __validate_key() {
         echo "Error: Invalid key name: key cannot be empty" >&2
         return 1
     fi
-    
+
     # Key must only contain alphanumeric characters plus: . - _ % $ @
     # Note: dash must be at end of character class or escaped
     if [[ ! "$key" =~ ^[a-zA-Z0-9._@%\$-]+$ ]]; then
         echo "Error: Invalid key name '$key'. Keys must only contain alphanumeric characters and: . - _ % \$ @" >&2
         return 1
     fi
-    
+
     return 0
 }
 
@@ -126,9 +130,6 @@ function __build_tree_with_updates() {
         # Output existing entries (excluding keys we're updating)
         if [[ -n "$tree_entries" ]]; then
             while IFS=$'\t' read -r mode_type_hash filename; do
-                local mode_type="${mode_type_hash% *}"
-                local hash="${mode_type_hash##* }"
-
                 # Skip if this key is being updated
                 if [[ -z "${new_blobs[$filename]:-}" ]]; then
                     echo "$mode_type_hash	$filename"
@@ -195,6 +196,18 @@ function __list_keys_in_tree() {
     git ls-tree "$tree_hash" 2>/dev/null | awk '{print $4}'
 }
 
+# Encode a value for safe display (escape special characters like Git does)
+# Args: value
+# Returns: encoded value suitable for single-line display
+# Encode a value for safe display (escape newlines and special characters)
+# Args: value
+# Returns: encoded value suitable for single-line display
+function __encode_value_for_display() {
+    local value="$1"
+    # Use printf %q for shell-safe quoting (similar to Git's internal quoting)
+    printf '%q' "$value"
+}
+
 # Create a commit with a new tree
 # Args: tree_hash parent_commit_hash message
 # Returns: new commit hash
@@ -218,12 +231,12 @@ function __update_metadata_ref() {
     local new_commit="$2"
     local old_commit="$3"
 
-    if [[ -n "$old_commit" ]]; then
-        git update-ref "$metadata_ref" "$new_commit" "$old_commit"
-    else
-        git update-ref "$metadata_ref" "$new_commit" "$METADATA_ZERO_OID"
-    fi
+    git update-ref "$metadata_ref" "$new_commit" "${old_commit:-$METADATA_ZERO_OID}"
 }
+
+#============================================================================
+# LOCAL METADATA OPERATIONS
+#============================================================================
 
 # Initialize or update metadata for a branch
 # Args: branch_name key value [key value ...]
@@ -294,9 +307,9 @@ function metadata_get() {
 # Get all metadata for a branch as key=value pairs
 # Args: branch_name
 # Returns: key-value pairs (one per line)
-function metadata_get_all() {
+function metadata_show() {
     if [[ $# -ne 1 ]]; then
-        echo "Usage: $(__usage_prefix) get-all <branch_name>" >&2
+        echo "Usage: $(__usage_prefix) show <branch_name>" >&2
         return 1
     fi
 
@@ -326,9 +339,76 @@ function metadata_get_all() {
     while IFS= read -r key; do
         local value
         if value=$(__read_value_from_tree "$tree_hash" "$key"); then
-            printf '%s=%s\n' "$key" "$value"
+            local encoded_value
+            encoded_value=$(__encode_value_for_display "$value")
+            printf '%s=%s\n' "$key" "$encoded_value"
         fi
     done <<<"$keys"
+}
+
+# List all keys for a branch
+# Args: branch_name
+# Returns: list of keys (one per line)
+function metadata_keys() {
+    if [[ $# -ne 1 ]]; then
+        echo "Usage: $(__usage_prefix) keys <branch_name>" >&2
+        return 1
+    fi
+
+    local branch_name="$1"
+    local metadata_ref
+    metadata_ref="$(__get_metadata_ref "$branch_name")"
+
+    if ! git rev-parse --verify "$metadata_ref" >/dev/null 2>&1; then
+        return 1
+    fi
+
+    local tree_hash
+    tree_hash=$(__get_current_tree "$metadata_ref")
+
+    __list_keys_in_tree "$tree_hash"
+}
+
+# Remove a specific key from metadata
+# Args: branch_name key
+function metadata_unset() {
+    if [[ $# -ne 2 ]]; then
+        echo "Usage: $(__usage_prefix) unset <branch_name> <key>" >&2
+        return 1
+    fi
+
+    local branch_name="$1"
+    local key="$2"
+    local metadata_ref
+    metadata_ref="$(__get_metadata_ref "$branch_name")"
+
+    if ! git rev-parse --verify "$metadata_ref" >/dev/null 2>&1; then
+        echo "No metadata found for branch ${branch_name}" >&2
+        return 1
+    fi
+
+    local existing_commit
+    existing_commit=$(git rev-parse --verify "$metadata_ref")
+
+    local existing_tree
+    existing_tree=$(__get_current_tree "$metadata_ref")
+
+    # Build new tree without the key
+    local new_tree
+    if ! new_tree=$(__build_tree_without_key "$existing_tree" "$key"); then
+        echo "Key '${key}' not found in metadata" >&2
+        return 1
+    fi
+
+    # Create new commit
+    local new_commit
+    new_commit=$(__create_metadata_commit "$new_tree" "$existing_commit" "Remove key '${key}' from metadata for branch: ${branch_name}")
+
+    # Update the ref
+    __update_metadata_ref "$metadata_ref" "$new_commit" "$existing_commit"
+
+    echo "Key '${key}' removed from metadata for branch ${branch_name}" >&2
+    return 0
 }
 
 # Delete metadata for a branch
@@ -354,6 +434,91 @@ function metadata_delete() {
     fi
 }
 
+# List all branches that have metadata
+# Returns: list of branch names (one per line)
+function metadata_list_branches() {
+    git for-each-ref "refs/${METADATA_REF_PREFIX}/*" --format="%(refname)" |
+        sed "s|^refs/${METADATA_REF_PREFIX}/||" || true
+}
+
+# Get the history of metadata changes for a branch
+# Args: branch_name [max_count]
+# Returns: list of commits with metadata content
+function metadata_history() {
+    if [[ $# -lt 1 ]] || [[ $# -gt 2 ]]; then
+        echo "Usage: $(__usage_prefix) history <branch_name> [max_count]" >&2
+        return 1
+    fi
+
+    local branch_name="$1"
+    local max_count="${2:-}"
+    local metadata_ref
+    metadata_ref="$(__get_metadata_ref "$branch_name")"
+
+    if ! git rev-parse --verify "$metadata_ref" >/dev/null 2>&1; then
+        echo "No metadata found for branch ${branch_name}" >&2
+        return 1
+    fi
+
+    # Generate the history output
+    __generate_metadata_history() {
+        # Use git log to show the history (all commits if max_count not specified)
+        local log_cmd=(git log --format="%H|%ai|%s")
+        if [[ -n "$max_count" ]]; then
+            log_cmd+=(-n "$max_count")
+        fi
+        log_cmd+=("$metadata_ref")
+
+        "${log_cmd[@]}" | while IFS='|' read -r commit_hash commit_date commit_msg; do
+            echo "Commit: ${commit_hash:0:8}"
+            echo "Date:   $commit_date"
+            echo "Message: $commit_msg"
+
+            # Get metadata content at this commit
+            local tree_hash
+            if tree_hash=$(git rev-parse "${commit_hash}^{tree}" 2>/dev/null); then
+                echo "Metadata:"
+                local keys
+                keys=$(__list_keys_in_tree "$tree_hash")
+                if [[ -n "$keys" ]]; then
+                    while IFS= read -r key; do
+                        local value
+                        if value=$(__read_value_from_tree "$tree_hash" "$key"); then
+                            local encoded_value
+                            encoded_value=$(__encode_value_for_display "$value")
+                            printf '  %s=%s\n' "$key" "$encoded_value"
+                        fi
+                    done <<<"$keys"
+                else
+                    echo "  (empty)"
+                fi
+            else
+                echo "Metadata: (no tree found)"
+            fi
+            echo ""
+        done
+    }
+
+    # Use pager if output is to a terminal
+    if [[ -t 1 ]]; then
+        # Interactive terminal - use pager (prefer git's configured pager)
+        local pager
+        pager=$(git config core.pager || echo "${PAGER:-less}")
+        if [[ -n "$pager" ]] && command -v "${pager%% *}" >/dev/null 2>&1; then
+            __generate_metadata_history | $pager
+        else
+            __generate_metadata_history | less -FRX
+        fi
+    else
+        # Non-interactive (piped/redirected) - no pager
+        __generate_metadata_history
+    fi
+}
+
+#============================================================================
+# REMOTE SYNC OPERATIONS
+#============================================================================
+
 # Push metadata to remote
 # Args: remote branch_name
 # Example: metadata_push "upstream" "integration/master/feature"
@@ -377,11 +542,17 @@ function metadata_push() {
 }
 
 # Fetch metadata from remote
-# Args: remote branch_name
+# Args: [--force] remote branch_name
 # Example: metadata_fetch "upstream" "integration/master/feature"
 function metadata_fetch() {
+    local force=false
+    if [[ "${1:-}" == "--force" ]] || [[ "${1:-}" == "-f" ]]; then
+        force=true
+        shift
+    fi
+
     if [[ $# -ne 2 ]]; then
-        echo "Usage: $(__usage_prefix) fetch <remote> <branch_name>" >&2
+        echo "Usage: $(__usage_prefix) fetch [--force] <remote> <branch_name>" >&2
         return 1
     fi
 
@@ -390,8 +561,54 @@ function metadata_fetch() {
     local metadata_ref
     metadata_ref="$(__get_metadata_ref "$branch_name")"
 
-    git fetch "$remote" "${metadata_ref}:${metadata_ref}" 2>/dev/null || return 1
+    # Check if local metadata exists
+    local local_exists=false
+    if git rev-parse --verify "$metadata_ref" >/dev/null 2>&1; then
+        local_exists=true
+    fi
+
+    # Try to fetch
+    local fetch_output
+    if $force; then
+        # Force update: fetch to temporary location then force-update local ref
+        if fetch_output=$(git fetch "$remote" "${metadata_ref}" 2>&1); then
+            local remote_commit
+            remote_commit=$(git rev-parse FETCH_HEAD 2>/dev/null)
+            if [[ -n "$remote_commit" ]]; then
+                git update-ref "$metadata_ref" "$remote_commit"
+                echo "Metadata forcefully updated for branch ${branch_name}" >&2
+                return 0
+            fi
+        else
+            echo "$fetch_output" >&2
+            return 1
+        fi
+    else
+        # Normal fetch: only succeeds if fast-forward or no local metadata
+        if fetch_output=$(git fetch "$remote" "${metadata_ref}:${metadata_ref}" 2>&1); then
+            if $local_exists; then
+                echo "Metadata updated for branch ${branch_name}" >&2
+            else
+                echo "Metadata fetched for branch ${branch_name}" >&2
+            fi
+            return 0
+        else
+            # Check if it's a non-fast-forward error
+            if $local_exists && echo "$fetch_output" | grep -q "non-fast-forward"; then
+                echo "Error: Local metadata for branch ${branch_name} has diverged from remote" >&2
+                echo "Use 'fetch --force' to overwrite local metadata, or 'push' to update remote" >&2
+                return 1
+            else
+                echo "$fetch_output" >&2
+                return 1
+            fi
+        fi
+    fi
 }
+
+#============================================================================
+# REMOTE OPERATIONS (STATELESS)
+#============================================================================
 
 # Internal utility functions for stateless remote operations
 
@@ -433,10 +650,6 @@ function __read_metadata_from_commit() {
 
     git rev-parse "${commit_hash}^{tree}" 2>/dev/null || echo ""
 }
-
-# Wrapper functions for remote operations
-# These fetch, operate, then push back to remote
-# Note: Requires network access and push permissions to remote
 
 # Set metadata on remote (robust, without full fetch)
 # Args: remote branch_name key value [key value ...]
@@ -524,9 +737,9 @@ function metadata_get_remote() {
 
 # Get all metadata from remote (without local fetch)
 # Args: remote branch_name
-function metadata_get_all_remote() {
+function metadata_show_remote() {
     if [[ $# -ne 2 ]]; then
-        echo "Usage: $(__usage_prefix) get-all -r <remote> <branch_name>" >&2
+        echo "Usage: $(__usage_prefix) show -r <remote> <branch_name>" >&2
         return 1
     fi
 
@@ -567,35 +780,45 @@ function metadata_get_all_remote() {
     while IFS= read -r key; do
         local value
         if value=$(__read_value_from_tree "$tree_hash" "$key"); then
-            printf '%s=%s\n' "$key" "$value"
+            local encoded_value
+            encoded_value=$(__encode_value_for_display "$value")
+            printf '%s=%s\n' "$key" "$encoded_value"
         fi
     done <<<"$keys"
 }
 
-# Delete metadata on remote
+# List all keys for a branch on remote
 # Args: remote branch_name
-function metadata_delete_remote() {
+# Returns: list of keys (one per line)
+function metadata_keys_remote() {
     if [[ $# -ne 2 ]]; then
-        echo "Usage: $(__usage_prefix) delete -r <remote> <branch_name>" >&2
+        echo "Usage: $(__usage_prefix) keys -r <remote> <branch_name>" >&2
         return 1
     fi
 
     local remote="$1"
     local branch_name="$2"
-    local metadata_ref
-    metadata_ref="$(__get_metadata_ref "$branch_name")"
 
-    # Delete remote ref
-    __git_quiet push "$remote" ":$metadata_ref" || {
-        echo "Failed to delete metadata for branch ${branch_name} on remote ${remote}" >&2
+    # Get remote commit hash (stateless)
+    local commit_hash
+    if ! commit_hash=$(__get_remote_metadata_commit "$remote" "$branch_name"); then
         return 1
-    }
+    fi
 
-    # Also delete local copy if it exists
-    metadata_delete "$branch_name" 2>/dev/null || true
+    if [[ -z "$commit_hash" ]]; then
+        return 1
+    fi
 
-    echo "Metadata deleted for branch ${branch_name} on remote ${remote}" >&2
-    return 0
+    # Fetch only the metadata objects
+    if ! __fetch_metadata_objects "$remote" "$commit_hash"; then
+        return 1
+    fi
+
+    # Read the tree and list keys
+    local tree_hash
+    tree_hash=$(__read_metadata_from_commit "$commit_hash")
+
+    __list_keys_in_tree "$tree_hash"
 }
 
 # Unset a key on remote (robust, without full fetch)
@@ -651,11 +874,30 @@ function metadata_unset_remote() {
     echo "Key '${key}' removed from metadata for branch ${branch_name} on remote ${remote}" >&2
 }
 
-# List all branches that have metadata
-# Returns: list of branch names (one per line)
-function metadata_list_branches() {
-    git for-each-ref "refs/${METADATA_REF_PREFIX}/*" --format="%(refname)" |
-        sed "s|^refs/${METADATA_REF_PREFIX}/||" || true
+# Delete metadata on remote
+# Args: remote branch_name
+function metadata_delete_remote() {
+    if [[ $# -ne 2 ]]; then
+        echo "Usage: $(__usage_prefix) delete -r <remote> <branch_name>" >&2
+        return 1
+    fi
+
+    local remote="$1"
+    local branch_name="$2"
+    local metadata_ref
+    metadata_ref="$(__get_metadata_ref "$branch_name")"
+
+    # Delete remote ref
+    __git_quiet push "$remote" ":$metadata_ref" || {
+        echo "Failed to delete metadata for branch ${branch_name} on remote ${remote}" >&2
+        return 1
+    }
+
+    # Also delete local copy if it exists
+    metadata_delete "$branch_name" 2>/dev/null || true
+
+    echo "Metadata deleted for branch ${branch_name} on remote ${remote}" >&2
+    return 0
 }
 
 # List all branches that have metadata on remote
@@ -675,120 +917,6 @@ function metadata_list_branches_remote() {
     git ls-remote "$remote_url" "refs/${METADATA_REF_PREFIX}/*" 2>/dev/null |
         awk '{print $2}' |
         sed "s|^refs/${METADATA_REF_PREFIX}/||" || true
-}
-
-# Remove a specific key from metadata
-# Args: branch_name key
-function metadata_unset() {
-    if [[ $# -ne 2 ]]; then
-        echo "Usage: $(__usage_prefix) unset <branch_name> <key>" >&2
-        return 1
-    fi
-
-    local branch_name="$1"
-    local key="$2"
-    local metadata_ref
-    metadata_ref="$(__get_metadata_ref "$branch_name")"
-
-    if ! git rev-parse --verify "$metadata_ref" >/dev/null 2>&1; then
-        echo "No metadata found for branch ${branch_name}" >&2
-        return 1
-    fi
-
-    local existing_commit
-    existing_commit=$(git rev-parse --verify "$metadata_ref")
-
-    local existing_tree
-    existing_tree=$(__get_current_tree "$metadata_ref")
-
-    # Build new tree without the key
-    local new_tree
-    if ! new_tree=$(__build_tree_without_key "$existing_tree" "$key"); then
-        echo "Key '${key}' not found in metadata" >&2
-        return 1
-    fi
-
-    # Create new commit
-    local new_commit
-    new_commit=$(__create_metadata_commit "$new_tree" "$existing_commit" "Remove key '${key}' from metadata for branch: ${branch_name}")
-
-    # Update the ref
-    __update_metadata_ref "$metadata_ref" "$new_commit" "$existing_commit"
-
-    echo "Key '${key}' removed from metadata for branch ${branch_name}" >&2
-    return 0
-}
-
-# Get the history of metadata changes for a branch
-# Args: branch_name [max_count]
-# Returns: list of commits with metadata content
-function metadata_history() {
-    if [[ $# -lt 1 ]] || [[ $# -gt 2 ]]; then
-        echo "Usage: $(__usage_prefix) history <branch_name> [max_count]" >&2
-        return 1
-    fi
-
-    local branch_name="$1"
-    local max_count="${2:-}"
-    local metadata_ref
-    metadata_ref="$(__get_metadata_ref "$branch_name")"
-
-    if ! git rev-parse --verify "$metadata_ref" >/dev/null 2>&1; then
-        echo "No metadata found for branch ${branch_name}" >&2
-        return 1
-    fi
-
-    # Generate the history output
-    __generate_metadata_history() {
-        # Use git log to show the history (all commits if max_count not specified)
-        local log_cmd=(git log --format="%H|%ai|%s")
-        if [[ -n "$max_count" ]]; then
-            log_cmd+=(-n "$max_count")
-        fi
-        log_cmd+=("$metadata_ref")
-
-        "${log_cmd[@]}" | while IFS='|' read -r commit_hash commit_date commit_msg; do
-            echo "Commit: ${commit_hash:0:8}"
-            echo "Date:   $commit_date"
-            echo "Message: $commit_msg"
-
-            # Get metadata content at this commit
-            local tree_hash
-            if tree_hash=$(git rev-parse "${commit_hash}^{tree}" 2>/dev/null); then
-                echo "Metadata:"
-                local keys
-                keys=$(__list_keys_in_tree "$tree_hash")
-                if [[ -n "$keys" ]]; then
-                    while IFS= read -r key; do
-                        local value
-                        if value=$(__read_value_from_tree "$tree_hash" "$key"); then
-                            printf '  %s=%s\n' "$key" "$value"
-                        fi
-                    done <<<"$keys"
-                else
-                    echo "  (empty)"
-                fi
-            else
-                echo "Metadata: (no tree found)"
-            fi
-            echo ""
-        done
-    }
-
-    # Use pager if output is to a terminal
-    if [[ -t 1 ]]; then
-        # Interactive terminal - use pager (prefer git's configured pager)
-        local pager
-        pager=$(git config core.pager || echo "${PAGER:-less}")
-        if [[ -n "$pager" ]] && command -v "${pager%% *}" >/dev/null 2>&1; then
-            __generate_metadata_history | $pager
-        else
-            __generate_metadata_history | less -FRX
-        fi
-    else
-        # Non-interactive (piped/redirected) - no pager
-        __generate_metadata_history
-    fi
 }
 
 # Get the history of metadata changes for a branch on remote
@@ -853,7 +981,9 @@ function metadata_history_remote() {
                     while IFS= read -r key; do
                         local value
                         if value=$(__read_value_from_tree "$tree_hash" "$key"); then
-                            printf '  %s=%s\n' "$key" "$value"
+                            local encoded_value
+                            encoded_value=$(__encode_value_for_display "$value")
+                            printf '  %s=%s\n' "$key" "$encoded_value"
                         fi
                     done <<<"$keys"
                 else
@@ -882,10 +1012,33 @@ function metadata_history_remote() {
     fi
 }
 
+#============================================================================
+# UTILITY OPERATIONS
+#============================================================================
+
+# Unescape encoded values (decode escape sequences)
+# Args: encoded_value
+# Returns: decoded value with actual newlines, tabs, etc.
+function metadata_unescape() {
+    if [[ $# -ne 1 ]]; then
+        echo "Usage: $(__usage_prefix) unescape <encoded_value>" >&2
+        return 1
+    fi
+
+    local encoded="$1"
+    # Use eval to decode the shell-quoted string (from printf %q)
+    # This is safe because printf %q produces properly escaped output
+    eval "printf '%s' $encoded"
+}
+
+#============================================================================
+# CLI AND HELP
+#============================================================================
+
 # Print help message
 function print_help() {
     cat <<EOF
-Usage: \$(\__usage_prefix) <command> \[-r <remote>\] \[arguments...\]
+Usage: $(__usage_prefix) <command> [-r <remote>] [arguments...]
 
 Branch metadata management using custom Git ref namespace: refs/\${METADATA_REF_PREFIX}/
 Metadata is stored as individual files (one per key) in the Git tree.
@@ -908,11 +1061,17 @@ Commands:
       Example: $(__usage_prefix) get integration/master/feat original_user
       Example: $(__usage_prefix) get -r upstream integration/master/feat original_user
 
-  get-all [-r <remote>] <branch>
+  show [-r <remote>] <branch>
       Get all metadata for a branch as key=value pairs
+      Values are shell-quoted using printf %q (e.g., $'line1\nline2')
       Use -r to read from remote (stateless, no local ref update)
-      Example: $(__usage_prefix) get-all integration/master/feat
-      Example: $(__usage_prefix) get-all -r upstream integration/master/feat
+      Example: \$(\__usage_prefix) show integration/master/feat
+      Example: \$(\__usage_prefix) show -r upstream integration/master/feat
+
+  unescape <encoded_value>
+      Decode a shell-quoted value from show or history output
+      Handles printf %q format (e.g., $'line1\nline2' -> actual newlines)
+      Example: \$(\__usage_prefix) unescape "\$'line1\\nline2\\nline3'"
 
   unset [-r <remote>] <branch> <key>
       Remove a specific key from branch metadata
@@ -928,6 +1087,7 @@ Commands:
 
   history [-r <remote>] <branch> [max_count]
       Show the history of metadata changes for a branch
+      Values are shell-quoted using printf %q (e.g., $'line1\nline2')
       Use -r to show history from remote
       Shows all history by default, or specify max_count to limit
       Example: $(__usage_prefix) history integration/master/feat
@@ -939,13 +1099,22 @@ Commands:
       Example: $(__usage_prefix) list
       Example: $(__usage_prefix) list -r upstream
 
+  keys [-r <remote>] <branch>
+      List all keys for a branch
+      Use -r to list keys from remote (stateless query)
+      Example: $(__usage_prefix) keys integration/master/feat
+      Example: $(__usage_prefix) keys -r upstream integration/master/feat
+
   push <remote> <branch>
       Push local metadata to remote repository
       Example: $(__usage_prefix) push upstream integration/master/feat
 
-  fetch <remote> <branch>
+  fetch [--force] <remote> <branch>
       Fetch metadata from remote repository
+      Fails if local metadata has diverged from remote (non-fast-forward)
+      Use --force to overwrite local metadata with remote version
       Example: $(__usage_prefix) fetch upstream integration/master/feat
+      Example: $(__usage_prefix) fetch --force upstream integration/master/feat
 
   help
       Show this help message
@@ -966,7 +1135,7 @@ function main() {
     # Parse -r/--remote flag for applicable commands
     local remote=""
     case "$command" in
-    set | get | get-all | unset | delete | history | list)
+    set | get | show | unset | delete | history | list | keys)
         if [[ "${1:-}" == "-r" ]] || [[ "${1:-}" == "--remote" ]]; then
             shift
             if [[ $# -lt 1 ]]; then
@@ -994,11 +1163,11 @@ function main() {
             metadata_get "$@"
         fi
         ;;
-    get-all)
+    show)
         if [[ -n "$remote" ]]; then
-            metadata_get_all_remote "$remote" "$@"
+            metadata_show_remote "$remote" "$@"
         else
-            metadata_get_all "$@"
+            metadata_show "$@"
         fi
         ;;
     unset)
@@ -1029,11 +1198,21 @@ function main() {
             metadata_list_branches
         fi
         ;;
+    keys)
+        if [[ -n "$remote" ]]; then
+            metadata_keys_remote "$remote" "$@"
+        else
+            metadata_keys "$@"
+        fi
+        ;;
     push)
         metadata_push "$@"
         ;;
     fetch)
         metadata_fetch "$@"
+        ;;
+    unescape)
+        metadata_unescape "$@"
         ;;
     help | --help | -h)
         print_help
