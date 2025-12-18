@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Upstream url: https://github.com/vanackere/git-branch-metadata
+# License: MIT License
+#
 # Helper functions to read/write metadata for branches using a custom ref namespace
 # By default, metadata is stored in refs/branch-metadata/<branch-name> (not under refs/heads/)
 # Each metadata ref contains key-value pairs stored as separate files in the Git tree

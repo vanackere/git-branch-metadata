@@ -29,10 +29,16 @@ A Git extension for storing and managing metadata for branches using a custom Gi
 3. Add to your PATH or install as a Git subcommand:
 
    ```bash
-   # Option 1: Add to PATH
+   # Option 1: User-local install (no root required)
+   mkdir -p ~/.local/bin
+   cp git-branch-metadata ~/.local/bin/
+   # Ensure ~/.local/bin is in your PATH (add to ~/.bashrc if needed):
+   export PATH="$HOME/.local/bin:$PATH"
+
+   # Option 2: System-wide install
    sudo cp git-branch-metadata /usr/local/bin/
-   
-   # Option 2: Install in Git's exec path
+
+   # Option 3: Install in Git's exec path
    sudo cp git-branch-metadata "$(git --exec-path)/"
    ```
 
@@ -211,17 +217,16 @@ git branch-metadata help
 
 ## How It Works
 
-Metadata is stored using a custom Git ref namespace `refs/branch-metadata/<branch-name>`. Unlike regular branches (which live under `refs/heads/`), these metadata refs exist in their own namespace, keeping them completely separate from your code branches.
+This tool leverages Git's native infrastructure to store metadata without modifying your actual branches. Metadata is stored in a custom ref namespace `refs/branch-metadata/<branch-name>`, completely separate from regular branches under `refs/heads/`.
 
-Each metadata ref points to a Git commit containing a tree where each key-value pair is stored as a separate file (one file per key). This approach:
+Each metadata ref points to a Git commit whose tree contains your key-value pairs, with each key stored as a separate file. This architecture provides:
 
-- **Custom ref namespace** - metadata refs live outside `refs/heads/`, avoiding clutter in branch listings
-- **Separate from code** - metadata doesn't mix with your actual branches
-- **Full Git versioning** - metadata changes are tracked as Git commits with history
-- **Easy syncing** - push/fetch metadata refs just like branches
-- **Atomic updates** - each metadata change creates a new commit
-- **No external dependencies** - pure Git plumbing operations
-- **Efficient storage** - only changed keys create new blobs
+- **Isolated storage** - metadata lives in its own namespace, keeping your branch list clean
+- **Version control** - every metadata change creates a new commit with full history tracking
+- **Familiar workflows** - sync metadata using standard push/fetch operations
+- **Atomic updates** - metadata changes are applied transactionally
+- **Native Git storage** - uses only Git's built-in plumbing commands, no external tools
+- **Space efficient** - Git's content-addressable storage means unchanged keys share blobs
 
 ## Examples
 
