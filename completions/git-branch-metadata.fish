@@ -56,6 +56,32 @@ function __fish_git_branch_metadata_using_force
     contains -- --force $cmd; or contains -- -f $cmd
 end
 
+# Helper function to check if --all flag is present
+function __fish_git_branch_metadata_using_all
+    set -l cmd (commandline -opc)
+    contains -- --all $cmd; or contains -- -a $cmd
+end
+
+# Helper function to check if remote has been specified for fetch/push
+function __fish_git_branch_metadata_needs_remote
+    set -l cmd (commandline -opc)
+    set -l count 0
+    # Count non-flag arguments after the subcommand (skip first 2: command and subcommand)
+    set -l idx 0
+    for arg in $cmd
+        set idx (math $idx + 1)
+        if test $idx -le 2
+            continue
+        end
+        # Skip flags
+        if not string match -q -- '-*' $arg
+            set count (math $count + 1)
+        end
+    end
+    # If count is 0, we need the remote
+    test $count -eq 0
+end
+
 # Main commands
 complete -c git-branch-metadata -n "__fish_use_subcommand" -a "set" -d "Set metadata for a branch"
 complete -c git-branch-metadata -n "__fish_use_subcommand" -a "get" -d "Get metadata value for a branch"
@@ -74,8 +100,9 @@ complete -c git-branch-metadata -n "__fish_use_subcommand" -a "help" -d "Show he
 complete -c git-branch-metadata -n "__fish_seen_subcommand_from set get show unset delete history list keys" -s r -l remote -d "Operate on remote" -f
 complete -c git-branch-metadata -n "__fish_seen_subcommand_from set get show unset delete history list keys; and __fish_seen_subcommand_from -r --remote" -a "(__fish_git_branch_metadata_remotes)" -d "Remote name"
 
-# Force flag for fetch
+# Flags for fetch
 complete -c git-branch-metadata -n "__fish_seen_subcommand_from fetch" -s f -l force -d "Force overwrite local metadata"
+complete -c git-branch-metadata -n "__fish_seen_subcommand_from fetch" -s a -l all -d "Fetch metadata for all branches"
 
 # Completions for 'set' command
 complete -c git-branch-metadata -n "__fish_seen_subcommand_from set; and not __fish_git_branch_metadata_using_remote" -a "(__fish_git_branch_metadata_branches)" -d "Branch name"
@@ -101,13 +128,13 @@ complete -c git-branch-metadata -n "__fish_seen_subcommand_from history; and not
 complete -c git-branch-metadata -n "__fish_seen_subcommand_from keys; and not __fish_git_branch_metadata_using_remote" -a "(__fish_git_branch_metadata_branches)" -d "Branch name"
 
 # Completions for 'push' command
-complete -c git-branch-metadata -n "__fish_seen_subcommand_from push" -a "(__fish_git_branch_metadata_remotes)" -d "Remote name"
-complete -c git-branch-metadata -n "__fish_seen_subcommand_from push" -a "(__fish_git_branch_metadata_branches)" -d "Branch name"
+complete -c git-branch-metadata -n "__fish_seen_subcommand_from push; and __fish_git_branch_metadata_needs_remote" -a "(__fish_git_branch_metadata_remotes)" -d "Remote name"
+complete -c git-branch-metadata -n "__fish_seen_subcommand_from push; and not __fish_git_branch_metadata_needs_remote" -a "(__fish_git_branch_metadata_branches)" -d "Branch name"
 
 # Completions for 'fetch' command
-complete -c git-branch-metadata -n "__fish_seen_subcommand_from fetch; and not __fish_git_branch_metadata_using_force" -a "(__fish_git_branch_metadata_remotes)" -d "Remote name"
-complete -c git-branch-metadata -n "__fish_seen_subcommand_from fetch; and __fish_git_branch_metadata_using_force" -a "(__fish_git_branch_metadata_remotes)" -d "Remote name"
-complete -c git-branch-metadata -n "__fish_seen_subcommand_from fetch" -a "(__fish_git_branch_metadata_branches)" -d "Branch name"
+complete -c git-branch-metadata -n "__fish_seen_subcommand_from fetch; and __fish_git_branch_metadata_needs_remote" -a "(__fish_git_branch_metadata_remotes)" -d "Remote name"
+# Only complete branch names if --all is not present and remote is already specified
+complete -c git-branch-metadata -n "__fish_seen_subcommand_from fetch; and not __fish_git_branch_metadata_using_all; and not __fish_git_branch_metadata_needs_remote" -a "(__fish_git_branch_metadata_branches)" -d "Branch name"
 
 # Completions when using -r/--remote flag
 complete -c git-branch-metadata -n "__fish_seen_subcommand_from set get show delete history keys; and __fish_git_branch_metadata_using_remote" -a "(__fish_git_branch_metadata_remote_branches)" -d "Branch name"

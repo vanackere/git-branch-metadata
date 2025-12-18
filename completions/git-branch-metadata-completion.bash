@@ -14,7 +14,7 @@ _git_branch_metadata() {
     3)
         # Position right after command
         case "$command" in
-        set|delete|show)
+        set | delete | show)
             if [[ "$cur" == -* ]]; then
                 # Completing a flag
                 mapfile -t COMPREPLY < <(compgen -W "-r --remote" -- "$cur")
@@ -25,7 +25,7 @@ _git_branch_metadata() {
                 mapfile -t COMPREPLY < <(compgen -W "$branches" -- "$cur")
             fi
             ;;
-        get|unset)
+        get | unset)
             if [[ "$cur" == -* ]]; then
                 # Completing a flag
                 mapfile -t COMPREPLY < <(compgen -W "-r --remote" -- "$cur")
@@ -73,7 +73,7 @@ _git_branch_metadata() {
         fetch)
             if [[ "$cur" == -* ]]; then
                 # Completing a flag
-                mapfile -t COMPREPLY < <(compgen -W "--force -f" -- "$cur")
+                mapfile -t COMPREPLY < <(compgen -W "--force -f --all -a" -- "$cur")
             else
                 # Complete remote names
                 local remotes
@@ -86,7 +86,7 @@ _git_branch_metadata() {
     *)
         # Position 4+
         case "$command" in
-        set|delete|show)
+        set | delete | show)
             # Check if -r/--remote flag is at position 3
             if [[ "${words[3]}" == "-r" ]] || [[ "${words[3]}" == "--remote" ]]; then
                 if [[ "$cword" -eq 4 ]]; then
@@ -107,7 +107,7 @@ _git_branch_metadata() {
                 COMPREPLY=()
             fi
             ;;
-        get|unset)
+        get | unset)
             # get/unset: <branch> <key> OR -r <remote> <branch> <key>
             if [[ "${words[3]}" == "-r" ]] || [[ "${words[3]}" == "--remote" ]]; then
                 if [[ "$cword" -eq 4 ]]; then
@@ -205,30 +205,33 @@ _git_branch_metadata() {
             # No completion after branch name
             ;;
         fetch)
-            # fetch: [--force] <remote> <branch>
-            if [[ "${words[3]}" == "--force" ]] || [[ "${words[3]}" == "-f" ]]; then
-                # --force flag at position 3
-                if [[ "$cword" -eq 4 ]]; then
-                    # Complete remote name after --force
-                    local remotes
-                    remotes=$(__git_remotes)
-                    mapfile -t COMPREPLY < <(compgen -W "$remotes" -- "$cur")
-                elif [[ "$cword" -eq 5 ]]; then
-                    # Complete branch name
-                    local branches
-                    branches=$(git branch-metadata list 2>/dev/null)
-                    mapfile -t COMPREPLY < <(compgen -W "$branches" -- "$cur")
+            # fetch: [--force] [--all] <remote> [<branch> ...]
+            # Determine if --force or --all is present
+            local has_force=false
+            local has_all=false
+            local remote_pos=3
+
+            for ((i = 3; i < cword; i++)); do
+                if [[ "${words[i]}" == "--force" ]] || [[ "${words[i]}" == "-f" ]]; then
+                    has_force=true
+                    ((remote_pos++))
+                elif [[ "${words[i]}" == "--all" ]] || [[ "${words[i]}" == "-a" ]]; then
+                    has_all=true
+                    ((remote_pos++))
                 fi
-            else
-                # No --force flag
-                if [[ "$cword" -eq 4 ]]; then
-                    # Complete branch names that have metadata
-                    local branches
-                    branches=$(git branch-metadata list 2>/dev/null)
-                    mapfile -t COMPREPLY < <(compgen -W "$branches" -- "$cur")
-                fi
+            done
+
+            if [[ "$cword" -eq "$remote_pos" ]]; then
+                # Complete remote name
+                local remotes
+                remotes=$(__git_remotes)
+                mapfile -t COMPREPLY < <(compgen -W "$remotes" -- "$cur")
+            elif [[ "$cword" -gt "$remote_pos" ]] && ! $has_all; then
+                # Complete branch names (only if --all is not present)
+                local branches
+                branches=$(git branch-metadata list 2>/dev/null)
+                mapfile -t COMPREPLY < <(compgen -W "$branches" -- "$cur")
             fi
-            # No completion after branch name
             ;;
         esac
         ;;
