@@ -9,7 +9,7 @@ A Git extension for storing and managing metadata for branches using a custom Gi
 - **Sync metadata** between local and remote repositories
 - **Track history** of metadata changes with full Git commit history
 - **No external dependencies** - pure Bash and Git
-- **Bash completion** support included
+- **Shell completion** support for Bash and Fish
 - **Customizable namespace** via environment variables
 
 ## Requirements
@@ -42,11 +42,21 @@ A Git extension for storing and managing metadata for branches using a custom Gi
    sudo cp git-branch-metadata "$(git --exec-path)/"
    ```
 
-4. (Optional) Enable bash completion:
+4. (Optional) Enable shell completion:
+
+   **Bash:**
 
    ```bash
-   source git-branch-metadata-completion.bash
+   source completions/git-branch-metadata-completion.bash
    # Or add to your ~/.bashrc
+   ```
+
+   **Fish:**
+
+   ```fish
+   # Copy to fish completions directory
+   cp completions/git-branch-metadata.fish ~/.config/fish/completions/
+   # Completions will be automatically loaded
    ```
 
 ## Usage
