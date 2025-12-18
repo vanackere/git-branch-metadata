@@ -74,10 +74,10 @@ function __validate_key() {
         return 1
     fi
 
-    # Key must only contain alphanumeric characters plus: . - _ % $ @
+    # Key must only contain alphanumeric characters plus: . - _ % $ @ :
     # Note: dash must be at end of character class or escaped
-    if [[ ! "$key" =~ ^[a-zA-Z0-9._@%\$-]+$ ]]; then
-        echo "Error: Invalid key name '$key'. Keys must only contain alphanumeric characters and: . - _ % \$ @" >&2
+    if [[ ! "$key" =~ ^[a-zA-Z0-9._@%\$:-]+$ ]]; then
+        echo "Error: Invalid key name '$key'. Keys must only contain alphanumeric characters and: . - _ % \$ @ :" >&2
         return 1
     fi
 
