@@ -184,13 +184,14 @@ git branch-metadata push <remote> <branch_name>
 #### Fetch metadata from remote
 
 ```bash
-git branch-metadata fetch <remote> <branch_name>
+git branch-metadata fetch <remote> <branch_name> [<branch_name> ...]
 ```
 
-Fetches metadata from a remote repository. By default, this operation will fail if the local metadata has diverged from the remote (non-fast-forward). Use `--force` to overwrite local metadata:
+Fetches metadata from a remote repository for one or more branches. By default, this operation will fail if the local metadata has diverged from the remote (non-fast-forward). Use `--force` to overwrite local metadata:
 
 ```bash
 git branch-metadata fetch --force <remote> <branch_name>
+git branch-metadata fetch <remote> branch1 branch2 branch3
 ```
 
 #### Help

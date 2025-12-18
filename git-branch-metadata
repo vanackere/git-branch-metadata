@@ -545,8 +545,9 @@ function metadata_push() {
 }
 
 # Fetch metadata from remote
-# Args: [--force] remote branch_name
+# Args: [--force] remote branch_name [branch_name ...]
 # Example: metadata_fetch "upstream" "integration/master/feature"
+# Example: metadata_fetch "upstream" "branch1" "branch2" "branch3"
 function metadata_fetch() {
     local force=false
     if [[ "${1:-}" == "--force" ]] || [[ "${1:-}" == "-f" ]]; then
@@ -554,59 +555,121 @@ function metadata_fetch() {
         shift
     fi
 
-    if [[ $# -ne 2 ]]; then
-        echo "Usage: $(__usage_prefix) fetch [--force] <remote> <branch_name>" >&2
+    if [[ $# -lt 2 ]]; then
+        echo "Usage: $(__usage_prefix) fetch [--force] <remote> <branch_name> [<branch_name> ...]" >&2
         return 1
     fi
 
     local remote="$1"
-    local branch_name="$2"
-    local metadata_ref
-    metadata_ref="$(__get_metadata_ref "$branch_name")"
+    shift
 
-    # Check if local metadata exists
-    local local_exists=false
-    if git rev-parse --verify "$metadata_ref" >/dev/null 2>&1; then
-        local_exists=true
-    fi
+    local overall_exit=0
 
-    # Try to fetch
+    # Build metadata refs and check which exist locally
+    declare -A local_exists_map
+    local -a refspecs=()
+    local -a branch_names=()
+
+    for branch_name in "$@"; do
+        local metadata_ref
+        metadata_ref="$(__get_metadata_ref "$branch_name")"
+        branch_names+=("$branch_name")
+
+        # Check if local metadata exists
+        if git rev-parse --verify "$metadata_ref" >/dev/null 2>&1; then
+            local_exists_map["$branch_name"]=true
+        else
+            local_exists_map["$branch_name"]=false
+        fi
+
+        # Build refspec
+        if $force; then
+            # For force mode, fetch without destination (will use FETCH_HEAD for single branch)
+            # For multiple branches, we'll fetch to a temp location
+            refspecs+=("${metadata_ref}")
+        else
+            # Normal mode: fetch directly to local ref
+            refspecs+=("${metadata_ref}:${metadata_ref}")
+        fi
+    done
+
+    # Single network call to fetch all branches
     local fetch_output
     if $force; then
-        # Force update: fetch to temporary location then force-update local ref
-        if fetch_output=$(git fetch "$remote" "${metadata_ref}" 2>&1); then
-            local remote_commit
-            remote_commit=$(git rev-parse FETCH_HEAD 2>/dev/null)
-            if [[ -n "$remote_commit" ]]; then
-                git update-ref "$metadata_ref" "$remote_commit"
-                echo "Metadata forcefully updated for branch ${branch_name}" >&2
-                return 0
-            fi
-        else
-            echo "$fetch_output" >&2
-            return 1
-        fi
-    else
-        # Normal fetch: only succeeds if fast-forward or no local metadata
-        if fetch_output=$(git fetch "$remote" "${metadata_ref}:${metadata_ref}" 2>&1); then
-            if $local_exists; then
-                echo "Metadata updated for branch ${branch_name}" >&2
-            else
-                echo "Metadata fetched for branch ${branch_name}" >&2
-            fi
-            return 0
-        else
-            # Check if it's a non-fast-forward error
-            if $local_exists && echo "$fetch_output" | grep -q "non-fast-forward"; then
-                echo "Error: Local metadata for branch ${branch_name} has diverged from remote" >&2
-                echo "Use 'fetch --force' to overwrite local metadata, or 'push' to update remote" >&2
-                return 1
+        # Force mode: fetch all refs, then update each local ref
+        if [[ ${#branch_names[@]} -eq 1 ]]; then
+            # Single branch: use FETCH_HEAD
+            if fetch_output=$(git fetch "$remote" "${refspecs[0]}" 2>&1); then
+                local remote_commit
+                remote_commit=$(git rev-parse FETCH_HEAD 2>/dev/null)
+                local metadata_ref
+                metadata_ref="$(__get_metadata_ref "${branch_names[0]}")"
+                if [[ -n "$remote_commit" ]]; then
+                    git update-ref "$metadata_ref" "$remote_commit"
+                    echo "Metadata forcefully updated for branch ${branch_names[0]}" >&2
+                else
+                    echo "Error: Failed to get remote commit for branch ${branch_names[0]}" >&2
+                    overall_exit=1
+                fi
             else
                 echo "$fetch_output" >&2
-                return 1
+                overall_exit=1
+            fi
+        else
+            # Multiple branches: fetch to temporary refs
+            local -a temp_refspecs=()
+            for branch_name in "${branch_names[@]}"; do
+                local metadata_ref
+                metadata_ref="$(__get_metadata_ref "$branch_name")"
+                temp_refspecs+=("${metadata_ref}:refs/__metadata_fetch_temp__/${branch_name}")
+            done
+
+            if fetch_output=$(git fetch "$remote" "${temp_refspecs[@]}" 2>&1); then
+                # Update each local ref from temp refs
+                for branch_name in "${branch_names[@]}"; do
+                    local metadata_ref
+                    metadata_ref="$(__get_metadata_ref "$branch_name")"
+                    local temp_ref="refs/__metadata_fetch_temp__/${branch_name}"
+
+                    if remote_commit=$(git rev-parse --verify "$temp_ref" 2>/dev/null); then
+                        git update-ref "$metadata_ref" "$remote_commit"
+                        git update-ref -d "$temp_ref"
+                        echo "Metadata forcefully updated for branch ${branch_name}" >&2
+                    else
+                        echo "Error: Failed to fetch branch ${branch_name}" >&2
+                        overall_exit=1
+                    fi
+                done
+            else
+                echo "$fetch_output" >&2
+                overall_exit=1
+            fi
+        fi
+    else
+        # Normal mode: single fetch with multiple refspecs
+        if fetch_output=$(git fetch "$remote" "${refspecs[@]}" 2>&1); then
+            # Success - report for each branch
+            for branch_name in "${branch_names[@]}"; do
+                if ${local_exists_map["$branch_name"]}; then
+                    echo "Metadata updated for branch ${branch_name}" >&2
+                else
+                    echo "Metadata fetched for branch ${branch_name}" >&2
+                fi
+            done
+        else
+            # Check if it's a non-fast-forward error
+            if echo "$fetch_output" | grep -q "non-fast-forward"; then
+                echo "Error: Some local metadata has diverged from remote" >&2
+                echo "Use 'fetch --force' to overwrite local metadata, or 'push' to update remote" >&2
+                overall_exit=1
+            else
+                echo "$fetch_output" >&2
+                overall_exit=1
             fi
         fi
     fi
+
+    return $overall_exit
 }
 
 #============================================================================
@@ -1112,11 +1175,12 @@ Commands:
       Push local metadata to remote repository
       Example: $(__usage_prefix) push upstream integration/master/feat
 
-  fetch [--force] <remote> <branch>
-      Fetch metadata from remote repository
+  fetch [--force] <remote> <branch> [<branch> ...]
+      Fetch metadata from remote repository for one or more branches
       Fails if local metadata has diverged from remote (non-fast-forward)
       Use --force to overwrite local metadata with remote version
       Example: $(__usage_prefix) fetch upstream integration/master/feat
+      Example: $(__usage_prefix) fetch upstream branch1 branch2 branch3
       Example: $(__usage_prefix) fetch --force upstream integration/master/feat
 
   help
