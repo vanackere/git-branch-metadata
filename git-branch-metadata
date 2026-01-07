@@ -440,6 +440,11 @@ function metadata_delete() {
 # List all branches that have metadata
 # Returns: list of branch names (one per line)
 function metadata_list_branches() {
+    if [[ $# -ne 0 ]]; then
+        echo "Usage: $(__usage_prefix) list" >&2
+        return 1
+    fi
+
     git for-each-ref "refs/${METADATA_REF_PREFIX}/*" --format="%(refname)" |
         sed "s|^refs/${METADATA_REF_PREFIX}/||" || true
 }
@@ -1022,10 +1027,19 @@ function metadata_list_branches_remote() {
 
     local remote="$1"
     local remote_url
-    remote_url=$(git remote get-url "$remote" 2>/dev/null || echo "$remote")
+    if ! remote_url=$(git remote get-url "$remote" 2>/dev/null); then
+        echo "Error: Remote '$remote' does not exist" >&2
+        return 1
+    fi
 
     # List all metadata refs on remote
-    git ls-remote "$remote_url" "refs/${METADATA_REF_PREFIX}/*" 2>/dev/null |
+    local ls_remote_output
+    if ! ls_remote_output=$(git ls-remote "$remote_url" "refs/${METADATA_REF_PREFIX}/*" 2>&1); then
+        echo "Error: Failed to list metadata from remote '$remote': $ls_remote_output" >&2
+        return 1
+    fi
+
+    echo "$ls_remote_output" |
         awk '{print $2}' |
         sed "s|^refs/${METADATA_REF_PREFIX}/||" || true
 }
@@ -1307,9 +1321,9 @@ function main() {
         ;;
     list)
         if [[ -n "$remote" ]]; then
-            metadata_list_branches_remote "$remote"
+            metadata_list_branches_remote "$remote" "$@"
         else
-            metadata_list_branches
+            metadata_list_branches "$@"
         fi
         ;;
     keys)
