@@ -554,9 +554,11 @@ function metadata_push() {
 # Example: metadata_fetch "upstream" "integration/master/feature"
 # Example: metadata_fetch "upstream" "branch1" "branch2" "branch3"
 # Example: metadata_fetch -a "upstream"
+# Example: metadata_fetch --prune --all "upstream"
 function metadata_fetch() {
     local force=false
     local fetch_all=false
+    local prune=false
 
     # Parse flags
     while [[ $# -gt 0 ]]; do
@@ -569,6 +571,21 @@ function metadata_fetch() {
             fetch_all=true
             shift
             ;;
+        --prune | -p)
+            prune=true
+            shift
+            ;;
+        --help | -h)
+            echo "Usage: $(__usage_prefix) fetch [--force] [--prune] --all <remote>" >&2
+            echo "   or: $(__usage_prefix) fetch [--force] [--prune] <remote> <branch_name> [<branch_name> ...]" >&2
+            echo "" >&2
+            echo "Options:" >&2
+            echo "  --force, -f   Overwrite local metadata with remote version" >&2
+            echo "  --all, -a     Fetch metadata for all branches on remote" >&2
+            echo "  --prune, -p   Delete local metadata refs that don't exist on remote" >&2
+            echo "  --help, -h    Show this help" >&2
+            return 0
+            ;;
         *)
             break
             ;;
@@ -576,8 +593,8 @@ function metadata_fetch() {
     done
 
     if [[ $# -lt 1 ]]; then
-        echo "Usage: $(__usage_prefix) fetch [--force] --all <remote>" >&2
-        echo "   or: $(__usage_prefix) fetch [--force] <remote> <branch_name> [<branch_name> ...]" >&2
+        echo "Usage: $(__usage_prefix) fetch [--force] [--prune] --all <remote>" >&2
+        echo "   or: $(__usage_prefix) fetch [--force] [--prune] <remote> <branch_name> [<branch_name> ...]" >&2
         return 1
     fi
 
@@ -592,8 +609,8 @@ function metadata_fetch() {
         # Error if branch names are also provided with --all
         if [[ $# -gt 0 ]]; then
             echo "Error: Cannot specify branch names when using --all flag" >&2
-            echo "Usage: $(__usage_prefix) fetch [--force] --all <remote>" >&2
-            echo "   or: $(__usage_prefix) fetch [--force] <remote> <branch_name> [<branch_name> ...]" >&2
+            echo "Usage: $(__usage_prefix) fetch [--force] [--prune] --all <remote>" >&2
+            echo "   or: $(__usage_prefix) fetch [--force] [--prune] <remote> <branch_name> [<branch_name> ...]" >&2
             return 1
         fi
 
@@ -610,8 +627,8 @@ function metadata_fetch() {
     else
         # Use branches provided as arguments
         if [[ $# -lt 1 ]]; then
-            echo "Usage: $(__usage_prefix) fetch [--force] --all <remote>" >&2
-            echo "   or: $(__usage_prefix) fetch [--force] <remote> <branch_name> [<branch_name> ...]" >&2
+            echo "Usage: $(__usage_prefix) fetch [--force] [--prune] --all <remote>" >&2
+            echo "   or: $(__usage_prefix) fetch [--force] [--prune] <remote> <branch_name> [<branch_name> ...]" >&2
             return 1
         fi
         branch_names=("$@")
@@ -716,6 +733,26 @@ function metadata_fetch() {
                 echo "$fetch_output" >&2
                 overall_exit=1
             fi
+        fi
+    fi
+
+    # Prune local metadata that doesn't exist on remote
+    if $prune; then
+        local local_branches
+        local_branches=$(metadata_list_branches)
+        if [[ -n "$local_branches" ]]; then
+            # Build a set of remote branches for quick lookup
+            declare -A remote_branch_set
+            for branch in "${branch_names[@]}"; do
+                remote_branch_set["$branch"]=1
+            done
+
+            while IFS= read -r local_branch; do
+                if [[ -z "${remote_branch_set[$local_branch]:-}" ]]; then
+                    echo "Pruning local metadata for branch ${local_branch} (not on remote)" >&2
+                    metadata_delete "$local_branch" 2>/dev/null || true
+                fi
+            done <<<"$local_branches"
         fi
     fi
 
@@ -1234,15 +1271,17 @@ Commands:
       Push local metadata to remote repository
       Example: $(__usage_prefix) push upstream integration/master/feat
 
-  fetch [--force] [--all] <remote> [<branch> ...]
+  fetch [--force] [--prune] [--all] <remote> [<branch> ...]
       Fetch metadata from remote repository for one or more branches
       Use --all/-a to fetch metadata for all branches on remote
       Fails if local metadata has diverged from remote (non-fast-forward)
       Use --force/-f to overwrite local metadata with remote version
+      Use --prune/-p to delete local metadata that doesn't exist on remote
       Example: $(__usage_prefix) fetch upstream integration/master/feat
       Example: $(__usage_prefix) fetch upstream branch1 branch2 branch3
       Example: $(__usage_prefix) fetch --all upstream
       Example: $(__usage_prefix) fetch --force --all upstream
+      Example: $(__usage_prefix) fetch --prune --all upstream
 
   help
       Show this help message
