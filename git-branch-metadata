@@ -1178,6 +1178,99 @@ function metadata_history_remote() {
 # UTILITY OPERATIONS
 #============================================================================
 
+# Prune metadata for branches that no longer exist (local)
+# Args: none
+# Returns: 0 on success
+function metadata_prune() {
+    if [[ $# -ne 0 ]]; then
+        echo "Usage: $(__usage_prefix) prune" >&2
+        return 1
+    fi
+
+    local branches_with_metadata
+    branches_with_metadata=$(metadata_list_branches)
+
+    if [[ -z "$branches_with_metadata" ]]; then
+        echo "No metadata found" >&2
+        return 0
+    fi
+
+    local pruned_count=0
+    while IFS= read -r branch; do
+        # Check if the branch exists locally
+        if ! git show-ref --verify --quiet "refs/heads/${branch}"; then
+            echo "Pruning metadata for non-existent branch: ${branch}" >&2
+            metadata_delete "$branch" 2>/dev/null || true
+            pruned_count=$((pruned_count + 1))
+        fi
+    done <<<"$branches_with_metadata"
+
+    if [[ $pruned_count -eq 0 ]]; then
+        echo "No stale metadata found" >&2
+    else
+        echo "Pruned metadata for ${pruned_count} branch(es)" >&2
+    fi
+
+    return 0
+}
+
+# Prune metadata for branches that no longer exist on remote
+# Args: remote
+# Returns: 0 on success
+function metadata_prune_remote() {
+    if [[ $# -ne 1 ]]; then
+        echo "Usage: $(__usage_prefix) prune -r <remote>" >&2
+        return 1
+    fi
+
+    local remote="$1"
+
+    # Get list of branches with metadata on remote
+    local branches_with_metadata
+    branches_with_metadata=$(metadata_list_branches_remote "$remote")
+
+    if [[ -z "$branches_with_metadata" ]]; then
+        echo "No metadata found on remote ${remote}" >&2
+        return 0
+    fi
+
+    # Get list of actual branches on remote
+    local remote_url
+    if ! remote_url=$(git remote get-url "$remote" 2>/dev/null); then
+        echo "Error: Remote '$remote' does not exist" >&2
+        return 1
+    fi
+
+    local remote_branches
+    remote_branches=$(git ls-remote --heads "$remote_url" 2>/dev/null | awk '{print $2}' | sed 's|^refs/heads/||')
+
+    # Build a set of existing remote branches for quick lookup
+    declare -A existing_branches
+    if [[ -n "$remote_branches" ]]; then
+        while IFS= read -r branch; do
+            existing_branches["$branch"]=1
+        done <<<"$remote_branches"
+    fi
+
+    local pruned_count=0
+    while IFS= read -r branch; do
+        # Check if the branch exists on remote
+        if [[ -z "${existing_branches[$branch]:-}" ]]; then
+            echo "Pruning metadata for non-existent branch on ${remote}: ${branch}" >&2
+            metadata_delete_remote "$remote" "$branch" 2>/dev/null || true
+            pruned_count=$((pruned_count + 1))
+        fi
+    done <<<"$branches_with_metadata"
+
+    if [[ $pruned_count -eq 0 ]]; then
+        echo "No stale metadata found on remote ${remote}" >&2
+    else
+        echo "Pruned metadata for ${pruned_count} branch(es) on remote ${remote}" >&2
+    fi
+
+    return 0
+}
+
 # Unescape encoded values (decode escape sequences)
 # Args: encoded_value
 # Returns: decoded value with actual newlines, tabs, etc.
@@ -1283,6 +1376,13 @@ Commands:
       Example: $(__usage_prefix) fetch --force --all upstream
       Example: $(__usage_prefix) fetch --prune --all upstream
 
+  prune [-r <remote>]
+      Remove metadata for branches that no longer exist
+      Without -r: checks local branches and prunes local metadata
+      With -r: checks branches on remote and prunes remote metadata
+      Example: $(__usage_prefix) prune
+      Example: $(__usage_prefix) prune -r upstream
+
   help
       Show this help message
 
@@ -1302,7 +1402,7 @@ function main() {
     # Parse -r/--remote flag for applicable commands
     local remote=""
     case "$command" in
-    set | get | show | unset | delete | history | list | keys)
+    set | get | show | unset | delete | history | list | keys | prune)
         if [[ "${1:-}" == "-r" ]] || [[ "${1:-}" == "--remote" ]]; then
             shift
             if [[ $# -lt 1 ]]; then
@@ -1377,6 +1477,13 @@ function main() {
         ;;
     fetch)
         metadata_fetch "$@"
+        ;;
+    prune)
+        if [[ -n "$remote" ]]; then
+            metadata_prune_remote "$remote" "$@"
+        else
+            metadata_prune "$@"
+        fi
         ;;
     unescape)
         metadata_unescape "$@"

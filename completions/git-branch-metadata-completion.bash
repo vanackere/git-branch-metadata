@@ -4,7 +4,7 @@ _git_branch_metadata() {
     local cur words cword
     _init_completion || return
 
-    local commands="set get show unset delete history list keys push fetch unescape help"
+    local commands="set get show unset delete history list keys push fetch prune unescape help"
     local command=${words[2]}
 
     case "$cword" in
@@ -48,6 +48,12 @@ _git_branch_metadata() {
             fi
             ;;
         list)
+            if [[ "$cur" == -* ]]; then
+                # Only -r/--remote flag
+                mapfile -t COMPREPLY < <(compgen -W "-r --remote" -- "$cur")
+            fi
+            ;;
+        prune)
             if [[ "$cur" == -* ]]; then
                 # Only -r/--remote flag
                 mapfile -t COMPREPLY < <(compgen -W "-r --remote" -- "$cur")
@@ -171,6 +177,18 @@ _git_branch_metadata() {
                     mapfile -t COMPREPLY < <(compgen -W "$remotes" -- "$cur")
                 fi
                 # No completion after remote name for list command
+            fi
+            ;;
+        prune)
+            # prune only accepts -r <remote>, nothing after remote name
+            if [[ "${words[3]}" == "-r" ]] || [[ "${words[3]}" == "--remote" ]]; then
+                if [[ "$cword" -eq 4 ]]; then
+                    # Complete remote name after -r/--remote
+                    local remotes
+                    remotes=$(__git_remotes)
+                    mapfile -t COMPREPLY < <(compgen -W "$remotes" -- "$cur")
+                fi
+                # No completion after remote name for prune command
             fi
             ;;
         keys)

@@ -93,12 +93,13 @@ complete -c git-branch-metadata -n "__fish_use_subcommand" -a "list" -d "List br
 complete -c git-branch-metadata -n "__fish_use_subcommand" -a "keys" -d "List keys for a branch"
 complete -c git-branch-metadata -n "__fish_use_subcommand" -a "push" -d "Push metadata to remote"
 complete -c git-branch-metadata -n "__fish_use_subcommand" -a "fetch" -d "Fetch metadata from remote"
+complete -c git-branch-metadata -n "__fish_use_subcommand" -a "prune" -d "Remove metadata for non-existent branches"
 complete -c git-branch-metadata -n "__fish_use_subcommand" -a "unescape" -d "Decode an encoded value"
 complete -c git-branch-metadata -n "__fish_use_subcommand" -a "help" -d "Show help message"
 
 # Remote flag for commands that support it
-complete -c git-branch-metadata -n "__fish_seen_subcommand_from set get show unset delete history list keys" -s r -l remote -d "Operate on remote" -f
-complete -c git-branch-metadata -n "__fish_seen_subcommand_from set get show unset delete history list keys; and __fish_seen_subcommand_from -r --remote" -a "(__fish_git_branch_metadata_remotes)" -d "Remote name"
+complete -c git-branch-metadata -n "__fish_seen_subcommand_from set get show unset delete history list keys prune" -s r -l remote -d "Operate on remote" -f
+complete -c git-branch-metadata -n "__fish_seen_subcommand_from set get show unset delete history list keys prune; and __fish_seen_subcommand_from -r --remote" -a "(__fish_git_branch_metadata_remotes)" -d "Remote name"
 
 # Flags for fetch
 complete -c git-branch-metadata -n "__fish_seen_subcommand_from fetch" -s f -l force -d "Force overwrite local metadata"
