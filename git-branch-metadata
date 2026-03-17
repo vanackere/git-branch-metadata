@@ -792,7 +792,8 @@ function __fetch_metadata_objects() {
     fi
 
     # Fetch only the specific commit and its objects (minimal transfer)
-    git fetch --no-tags --depth=1 "$remote" "$commit_hash" 2>/dev/null
+    # Redirect both stdout and stderr: git auto-gc can emit "Nothing new to pack." on stdout
+    git fetch --no-tags --depth=1 "$remote" "$commit_hash" >/dev/null 2>&1
 }
 
 # Read metadata from a commit hash (after objects are fetched)
