@@ -159,6 +159,22 @@ function __build_tree_without_key() {
         return 1
     fi
 
+    local keys
+    keys=$(__list_keys_in_tree "$existing_tree")
+
+    local key_count=0
+    [[ -n "$keys" ]] && key_count=$(printf '%s\n' "$keys" | wc -l | tr -d ' ')
+
+    if [[ "$key_count" -le 1 ]]; then
+        # Only one key — verify it's the one being removed, then yield an empty tree
+        if [[ "$keys" != "$key_to_remove" ]]; then
+            return 1
+        fi
+        git mktree </dev/null
+        return
+    fi
+
+    # Multiple keys — grep is guaranteed to emit at least one line, no pipefail risk
     # Get existing tree entries, excluding the key to remove
     git ls-tree "$existing_tree" 2>/dev/null |
         grep -v $'\t'"$key_to_remove"'$' |
