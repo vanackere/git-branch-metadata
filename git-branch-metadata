@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Upstream url: https://github.com/vanackere/git-branch-metadata
 # License: MIT License
